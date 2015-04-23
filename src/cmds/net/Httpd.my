@@ -1,6 +1,7 @@
 package embox.cmd.net
 
-@Cmd(name = "httpd",
+@AutoCmd
+@Cmd(name = "httpd_pthread",
 	help = "Start HTTP server",
 	man = '''
 		NAME
@@ -15,17 +16,18 @@ package embox.cmd.net
 		AUTHORS
 			Ilia Vaprol
 	''')
-module httpd {
+module httpd_pthread {
 	option number use_ip_ver=4
 	option boolean use_cgi=false
-	source "httpd.c"
+	option boolean use_real_cmd=false
+	source "httpd_pthread.c"
 
-	depends embox.compat.libc.LibC
+	depends embox.compat.libc.all
 	depends embox.compat.posix.LibPosix
 	depends embox.compat.posix.net.socket
 	depends embox.compat.posix.proc.vfork
+	depends embox.compat.posix.proc.waitpid
 	depends embox.fs.core
 	depends embox.framework.LibFramework
-	depends embox.net.util.request_parser
 	depends embox.net.lib.getifaddrs
 }

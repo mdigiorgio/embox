@@ -6,6 +6,9 @@
  * @author Anton Kozlov
  */
 
+#define _GNU_SOURCE
+
+#include <stdbool.h>
 #include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -23,20 +26,21 @@
 
 #include <stdlib.h>
 #include <sys/wait.h>
-#include <sys/stat.h>
 
 #include <framework/mod/options.h>
 
-EMBOX_CMD(httpd);
+#include "pthread.h"
+
 
 #define USE_IP_VER OPTION_GET(NUMBER,use_ip_ver)
 #define USE_CGI    OPTION_GET(BOOLEAN,use_cgi)
+
 
 #define HTTPD_LOG_QUIET 0
 #define HTTPD_LOG_ERROR 1
 #define HTTPD_LOG_DEBUG 2
 
-#define HTTPD_LOG_LEVEL HTTPD_LOG_DEBUG
+#define HTTPD_LOG_LEVEL HTTPD_LOG_QUIET
 
 #define HTTPD_MAX_PATH 128
 #define BUFF_SZ     1024
@@ -61,12 +65,24 @@ EMBOX_CMD(httpd);
 #define HTTPD_ERROR(_msg, ...)
 #endif
 
+#define ARRAY_SIZE(array) \
+	(sizeof(array) / sizeof(*(array)))
+
+#define MAX_CLIENTS_COUNT 4
+
 struct client_info {
 	struct sockaddr ci_addr;
 	socklen_t ci_addrlen;
 	int ci_sock;
+	int ci_index;
+	int id;
 
 	const char *ci_basedir;
+};
+
+struct my {
+	const char *basedir;
+	int host;
 };
 
 struct http_req_uri {
@@ -81,8 +97,20 @@ struct http_req {
 	char *content_len;
 };
 
-static char httpd_g_inbuf[BUFF_SZ];
-static char httpd_g_outbuf[BUFF_SZ];
+static struct client_info clients[MAX_CLIENTS_COUNT];
+static char client_is_free[MAX_CLIENTS_COUNT];
+
+static int clients_get_free_index(void) {
+	int i;
+
+	for (i = 0; i < MAX_CLIENTS_COUNT; i++) {
+		if (client_is_free[i]) {
+			client_is_free[i] = 0;
+			return i;
+		}
+	}
+	return -1; // there are no free indexes
+}
 
 static char *httpd_parse_uri(char *str, struct http_req_uri *huri) {
 	char *pb;
@@ -237,6 +265,7 @@ static int httpd_send_response_file(const struct client_info *cinfo, const struc
 	FILE *file;
 	int status, cbyte;
 	size_t read_bytes;
+	char httpd_outbuf[BUFF_SZ];
 
 	snprintf(filename, sizeof(filename), "%s/%s", cinfo->ci_basedir, hreq->uri.target);
 	filename[sizeof(filename) - 1] = '\0';
@@ -253,14 +282,14 @@ static int httpd_send_response_file(const struct client_info *cinfo, const struc
 		status = 200;
 	}
 
-	cbyte = snprintf(httpd_g_outbuf, sizeof(httpd_g_outbuf),
+	cbyte = snprintf(httpd_outbuf, sizeof(httpd_outbuf),
 			"HTTP/1.1 %d %s\r\n"
 			"Content-Type: %s\r\n"
 			"Connection: close\r\n"
 			"\r\n",
 			status, "", httpd_filename2content_type(filename));
 
-	if (0 > write(cinfo->ci_sock, httpd_g_outbuf, cbyte)) {
+	if (0 > write(cinfo->ci_sock, httpd_outbuf, cbyte)) {
 		return -errno;
 	}
 
@@ -269,11 +298,11 @@ static int httpd_send_response_file(const struct client_info *cinfo, const struc
 		return 0;
 	}
 
-	while (0 != (read_bytes = fread(httpd_g_outbuf, 1, sizeof(httpd_g_outbuf), file))) {
+	while (0 != (read_bytes = fread(httpd_outbuf, 1, sizeof(httpd_outbuf), file))) {
 		const char *pb;
 		int remain_send_bytes;
 
-		pb = httpd_g_outbuf;
+		pb = httpd_outbuf;
 		remain_send_bytes = read_bytes;
 		while (remain_send_bytes) {
 			int sent_bytes;
@@ -295,7 +324,7 @@ static int httpd_send_response_file(const struct client_info *cinfo, const struc
 static int httpd_send_response_cgi(const struct client_info *cinfo, const struct http_req *hreq) {
 	FILE *skf;
 
-       	skf = fdopen(cinfo->ci_sock, "rw");
+	skf = fdopen(cinfo->ci_sock, "rw");
 	if (!skf) {
 		HTTPD_ERROR("can't allocate FILE for socket");
 		return -ENOMEM;
@@ -418,6 +447,7 @@ static int httpd_read_http_header(const struct client_info *cinfo, char *buf, si
 
 	pb = buf;
 	if (0 > read(sk, pattbuf, sizeof(pattbuf))) {
+		printf("[%02d] read 1 error\n", cinfo->id);
 		return -errno;
 	}
 	while (0 != strncmp(pattern, pattbuf, sizeof(pattbuf)) && buf_sz > 0) {
@@ -425,11 +455,13 @@ static int httpd_read_http_header(const struct client_info *cinfo, char *buf, si
 		buf_sz--;
 		memmove(pattbuf, pattbuf + 1, sizeof(pattbuf) - 1);
 		if (0 > read(sk, &pattbuf[sizeof(pattbuf) - 1], 1)) {
+			printf("[%02d] read 2 error\n", cinfo->id);
 			return -errno;
 		}
 	}
 
 	if (buf_sz == 0) {
+		printf("[%02d] read 3 error\n", cinfo->id);
 		return -ENOENT;
 	}
 
@@ -440,15 +472,16 @@ static int httpd_read_http_header(const struct client_info *cinfo, char *buf, si
 static int httpd_client_process(const struct client_info *cinfo) {
 	struct http_req hreq;
 	int ret;
+	char httpd_inbuf[BUFF_SZ];
 
-	ret = httpd_read_http_header(cinfo, httpd_g_inbuf, sizeof(httpd_g_inbuf));
+	ret = httpd_read_http_header(cinfo, httpd_inbuf, sizeof(httpd_inbuf));
 	if (ret < 0) {
 		HTTPD_ERROR("can't read from client socket: %s", strerror(errno));
 		return ret;
 	}
-	httpd_g_inbuf[ret] = '\0';
+	httpd_inbuf[ret] = '\0';
 
-	if (NULL == httpd_parse_request(httpd_g_inbuf, &hreq)) {
+	if (NULL == httpd_parse_request(httpd_inbuf, &hreq)) {
 		return -EINVAL;
 	}
 
@@ -464,12 +497,23 @@ static int httpd_client_process(const struct client_info *cinfo) {
 	if (0 == strncmp(hreq.uri.target, CGI_PREFIX, strlen(CGI_PREFIX))) {
 		return httpd_send_response_cgi(cinfo, &hreq);
 	}
-
 	return httpd_send_response_file(cinfo, &hreq);
 }
 
-static int httpd(int argc, char **argv) {
+static void *do_httpd_client_thread(void *cinfo) {
+
+	struct client_info *ci = (struct client_info *) cinfo;
+
+	httpd_client_process(ci);
+	close(ci->ci_sock);
+	client_is_free[ci->ci_index]=1;
+	return NULL;
+}
+
+
+int main(int argc, char **argv) {
 	int host;
+	int i;
 	const char *basedir;
 #if USE_IP_VER == 4
 	struct sockaddr_in inaddr;
@@ -509,24 +553,37 @@ static int httpd(int argc, char **argv) {
 		return -errno;
 	}
 
+	for (i = 0; i < MAX_CLIENTS_COUNT; ++i) {
+		client_is_free[i] = 1;
+	}
 	while (1) {
-		struct client_info ci;
+		struct client_info *ci;
+		pthread_t thread;
+		int index = clients_get_free_index();
 
-		ci.ci_addrlen = inaddrlen;
-		ci.ci_sock = accept(host, &ci.ci_addr, &ci.ci_addrlen);
-		if (ci.ci_sock == -1) {
+		if (index == -1) {
+			HTTPD_ERROR("%s\n", "There are no more memory for new connection!");
+			continue;
+		}
+
+		ci = &clients[index];
+		ci->ci_index=index;
+		ci->ci_addrlen = inaddrlen;
+		ci->ci_sock = accept(host, &ci->ci_addr, &ci->ci_addrlen);
+		if (ci->ci_sock == -1) {
 			HTTPD_ERROR("accept() failure: %s", strerror(errno));
 			continue;
 		}
-		assert(ci.ci_addrlen == inaddrlen);
-		ci.ci_basedir = basedir;
+		assert(ci->ci_addrlen == inaddrlen);
+		ci->ci_basedir = basedir;
 
-		httpd_client_process(&ci);
+		pthread_create(&thread, NULL, do_httpd_client_thread, ci);
 
-		close(ci.ci_sock);
+		pthread_detach(thread);
 	}
 
 	close(host);
 
 	return 0;
 }
+
