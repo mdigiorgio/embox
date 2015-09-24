@@ -25,7 +25,7 @@
 
 #include <kernel/task.h>
 
-#include <security/seculog.h>
+#include <security/seculog/seculog.h>
 
 #include <crypt.h>
 
@@ -67,7 +67,7 @@ struct taskdata {
 };
 
 #if OPTION_GET(BOOLEAN, security_support)
-#include <security/smac.h>
+#include <security/smac/smac.h>
 #define SMAC_USERS "/smac_users"
 static void login_set_security(struct taskdata *tdata) {
 	const struct spwd *spwd;

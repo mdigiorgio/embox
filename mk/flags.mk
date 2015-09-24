@@ -10,16 +10,16 @@ LDFLAGS ?=
 
 CROSS_COMPILE ?=
 
-CC      := $(CROSS_COMPILE)gcc
-CPP     := $(CC) -E
-CXX     := $(CROSS_COMPILE)g++
-AR      := $(CROSS_COMPILE)ar
-AS      := $(CROSS_COMPILE)as
-LD      := $(CROSS_COMPILE)ld
-NM      := $(CROSS_COMPILE)nm
-OBJDUMP := $(CROSS_COMPILE)objdump
-OBJCOPY := $(CROSS_COMPILE)objcopy
-SIZE    := $(CROSS_COMPILE)size
+CC      ?= $(CROSS_COMPILE)gcc
+CPP     ?= $(CC) -E
+CXX     ?= $(CROSS_COMPILE)g++
+AR      ?= $(CROSS_COMPILE)ar
+AS      ?= $(CROSS_COMPILE)as
+LD      ?= $(CROSS_COMPILE)ld
+NM      ?= $(CROSS_COMPILE)nm
+OBJDUMP ?= $(CROSS_COMPILE)objdump
+OBJCOPY ?= $(CROSS_COMPILE)objcopy
+SIZE    ?= $(CROSS_COMPILE)size
 
 comma_sep_list = $(subst $(\s),$(,),$(strip $1))
 
@@ -143,7 +143,6 @@ cppflags_fn = \
 	-U__linux__ -Ulinux -U__linux \
 	-D__EMBOX__ \
 	-D__unix \
-	-D"__impl_x(path)=<../path>" \
 	-imacros $(call $1,$(AUTOCONF_DIR))/config.lds.h \
 	-I$(call $1,$(INCUDE_INSTALL_DIR)) \
 	-I$(call $1,$(SRC_DIR))/include \

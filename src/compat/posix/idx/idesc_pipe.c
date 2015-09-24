@@ -197,23 +197,6 @@ static ssize_t pipe_write(struct idesc *idesc, const void *buf, size_t nbyte) {
 }
 
 static int pipe_fcntl(struct idesc *data, int cmd, void * args) {
-#if 0
-	struct pipe *pipe;
-	size_t size;
-
-	pipe = (struct pipe*) task_idx_desc_data(data);
-
-	switch (cmd) {
-	case F_GETPIPE_SZ:
-		return pipe->buf_size;
-	case F_SETPIPE_SZ:
-		size = va_arg(args, size_t);
-		pipe_set_buf_size(pipe, size);
-		break;
-	default:
-		break;
-	}
-#endif
 	return 0;
 }
 
@@ -295,13 +278,20 @@ static struct pipe *pipe_alloc(void) {
 	struct ring_buff *pipe_buff;
 	void *storage;
 
-	pipe = storage = NULL;
-	pipe_buff = NULL;
-
-	if (!(storage = sysmalloc(DEFAULT_PIPE_BUFFER_SIZE))
-				|| !(pipe = sysmalloc(sizeof(struct pipe)))
-				|| !(pipe_buff = sysmalloc(sizeof(struct ring_buff)))) {
-		goto free_memory;
+	storage = sysmalloc(DEFAULT_PIPE_BUFFER_SIZE);
+	if (!storage) {
+		return NULL;
+	}
+	pipe = sysmalloc(sizeof(struct pipe));
+	if (!pipe) {
+		sysfree(storage);
+		return NULL;
+	}
+	pipe_buff = sysmalloc(sizeof(struct ring_buff));
+	if (!pipe_buff) {
+		sysfree(storage);
+		sysfree(pipe);
+		return NULL;
 	}
 
 	pipe->buff = pipe_buff;
@@ -311,12 +301,6 @@ static struct pipe *pipe_alloc(void) {
 	mutex_init(&pipe->mutex);
 
 	return pipe;
-
-free_memory:
-	if (storage)   sysfree(storage);
-	if (pipe_buff) sysfree(pipe_buff);
-	if (pipe)      sysfree(pipe);
-	return NULL;
 }
 
 static void pipe_free(struct pipe *pipe) {

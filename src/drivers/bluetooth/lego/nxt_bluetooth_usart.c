@@ -16,15 +16,15 @@
 #include <drivers/at91sam7s256.h>
 #include <drivers/pins.h>
 #include <drivers/bluetooth/bluetooth.h>
-#include <drivers/bluetooth/blue_core4.h>
+#include <drivers/bluetooth/lego/blue_core4.h>
 #include <kernel/time/timer.h>
 
 #include <embox/unit.h>
 
 
-#include <pnet/core.h>
-#include <pnet/repo.h>
-#include <pnet/pnet_pack.h>
+#include <pnet/core/core.h>
+#include <pnet/core/repo.h>
+#include <pnet/pack/pnet_pack.h>
 #include <pnet/pack/pack_alone.h>
 
 #define RX_PIN  ((uint32_t) (1 << OPTION_GET(NUMBER,rx_pin)))
